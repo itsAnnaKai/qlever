@@ -15,7 +15,7 @@
 #include "global/ValueIdComparators.h"
 #include "index/IdTableUtils.h"
 #include "util/TransparentFunctors.h"
-#include "util/VarsRequiredFromSubtree.h"
+#include "util/ColumnStrippingHelpers.h"
 
 // _____________________________________________________________________________
 size_t OrderBy::getResultWidth() const { return subtree_->getResultWidth(); }
