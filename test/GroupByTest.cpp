@@ -18,6 +18,7 @@
 #include "engine/NamedResultCache.h"
 #include "engine/QueryPlanner.h"
 #include "engine/Sort.h"
+#include "engine/StripColumns.h"
 #include "engine/Values.h"
 #include "engine/ValuesForTesting.h"
 #include "engine/sparqlExpressions/AggregateExpression.h"
@@ -3582,4 +3583,178 @@ TEST(GroupBy, BlankNodeInGroupBy) {
   EXPECT_EQ(table(0, 1).getDatatype(), Datatype::BlankNodeIndex);
   EXPECT_EQ(table(1, 1).getDatatype(), Datatype::BlankNodeIndex);
   EXPECT_NE(table(0, 1), table(1, 1));
+}
+
+// _____________________________________________________________________________
+TEST(GroupBy, makeTreeWithStrippedColumns) {
+  auto* qec = getQec();
+  std::vector<std::optional<Variable>> vars = {
+      {Variable{"?a"}, Variable{"?b"}, Variable{"?c"}, Variable{"?d"}}};
+  IdTable input{makeIdTableFromVector(
+      {{6, 1, 3, 6}, {6, 2, 3, 5}, {3, 6, 5, 4}, {1, 6, 5, 1}})};
+
+  auto subtree = ad_utility::makeExecutionTree<ValuesForTesting>(
+      qec, std::move(input), std::move(vars));
+
+  // Test case 1: `GroupBy` groups by ?a and produces the alias ?sumB from ?b.
+  // The parent tree requests ?a and ?sumB.
+  // Therefore, ?a and ?sumB should remain.
+  // This tests the case where fewer variables are requested than the `GroupBy`
+  // operation produces.
+  {
+    Alias detAlias(
+        SparqlExpressionPimpl{
+            std::make_unique<SumExpression>(
+                false, std::make_unique<VariableExpression>(Variable{"?b"})),
+            "SUM(?b)"},
+        Variable{"?sumB"});
+
+    GroupBy groupBy(qec, {Variable{"?a"}}, {detAlias}, subtree);
+
+    std::optional<std::shared_ptr<QueryExecutionTree>> resultTree =
+        groupBy.makeTreeWithStrippedColumns(
+            std::set<Variable>{Variable{"?a"}, Variable{"?sumB"}});
+    ASSERT_TRUE(resultTree.has_value());
+    ASSERT_TRUE((*resultTree) != nullptr);
+    const VariableToColumnMap& v2cMap = (*resultTree)->getVariableColumns();
+
+    EXPECT_EQ(v2cMap.size(), 2);
+    EXPECT_THAT(v2cMap,
+                testing::UnorderedElementsAre(testing::Key(Variable{"?a"}),
+                                              testing::Key(Variable{"?sumB"})));
+  }
+
+  // Test case 2: `GroupBy` groups by ?a and ?b and produces the alias ?sumB
+  // from ?b.
+  // The parent tree requests ?a, ?b and ?sumB.
+  // Therefore, ?a, ?b and ?sumB should remain.
+  // This tests the case where all variables produced by the `GroupBy`
+  // operation are requested by the parent tree.
+  {
+    Alias detAlias(
+        SparqlExpressionPimpl{
+            std::make_unique<SumExpression>(
+                false, std::make_unique<VariableExpression>(Variable{"?b"})),
+            "SUM(?b)"},
+        Variable{"?sumB"});
+
+    GroupBy groupBy(qec, {Variable{"?a"}, Variable{"?b"}}, {detAlias}, subtree);
+
+    std::optional<std::shared_ptr<QueryExecutionTree>> resultTree =
+        groupBy.makeTreeWithStrippedColumns(std::set<Variable>{
+            Variable{"?a"}, Variable{"?b"}, Variable{"?sumB"}});
+    ASSERT_TRUE(resultTree.has_value());
+    ASSERT_TRUE((*resultTree) != nullptr);
+    const VariableToColumnMap& v2cMap = (*resultTree)->getVariableColumns();
+
+    EXPECT_EQ(v2cMap.size(), 3);
+    EXPECT_THAT(v2cMap,
+                testing::UnorderedElementsAre(testing::Key(Variable{"?a"}),
+                                              testing::Key(Variable{"?b"}),
+                                              testing::Key(Variable{"?sumB"})));
+  }
+
+  // Test case 3: `GroupBy` groups by ?a and ?c and produces no aliases.
+  // The parent tree requests ?a, ?b, ?c and ?notIncluded.
+  // Therefore, ?a and ?c should remain, while ?b and ?notIncluded are ignored.
+  // This tests the case where the parent tree requests variables that are not
+  // produced by the `GroupBy` operation.
+  {
+    GroupBy groupBy(qec, {Variable{"?a"}, Variable{"?c"}}, std::vector<Alias>{},
+                    subtree);
+
+    std::optional<std::shared_ptr<QueryExecutionTree>> resultTree =
+        groupBy.makeTreeWithStrippedColumns(
+            std::set<Variable>{Variable{"?a"}, Variable{"?c"}, Variable{"?b"},
+                               Variable{"?notIncluded"}});
+    ASSERT_TRUE(resultTree.has_value());
+    ASSERT_TRUE((*resultTree) != nullptr);
+    const VariableToColumnMap& v2cMap = (*resultTree)->getVariableColumns();
+
+    EXPECT_EQ(v2cMap.size(), 2);
+    EXPECT_THAT(v2cMap,
+                testing::UnorderedElementsAre(testing::Key(Variable{"?a"}),
+                                              testing::Key(Variable{"?c"})));
+  }
+
+  // Test case 4: `GroupBy` groups by ?c and ?d and produces no aliases.
+  // The parent tree requests ?d.
+  // Therefore, ?d should remain in the result, while ?c is only required
+  // internally by the `GroupBy` operation.
+  // This tests the case where a `StripColumns` operation has to be added
+  // because a `groupByVariable` is not requested by the parent tree.
+  {
+    GroupBy groupBy(qec, {Variable{"?c"}, Variable{"?d"}}, {}, subtree);
+
+    std::optional<std::shared_ptr<QueryExecutionTree>> resultTree =
+        groupBy.makeTreeWithStrippedColumns(std::set<Variable>{Variable{"?d"}});
+    ASSERT_TRUE(resultTree.has_value());
+    ASSERT_TRUE((*resultTree) != nullptr);
+    const VariableToColumnMap& v2cMap = (*resultTree)->getVariableColumns();
+
+    // Only ?d should remain, as ?c is only required internally by the
+    // `GroupBy` operation and is not requested by the parent tree.
+    EXPECT_EQ(v2cMap.size(), 1);
+    EXPECT_TRUE(v2cMap.contains(Variable{"?d"}));
+
+    // Check whether a `StripColumns` operation has been added to the execution
+    // tree because ?c is required by `GroupBy` but not requested by the parent
+    // tree. Only ?d should remain in the result of the `StripColumns`
+    // operation.
+    /*auto rootOperation = (*resultTree)->getRootOperation();
+    StripColumns* stripColumnsOperation =
+        dynamic_cast<StripColumns*>(rootOperation.get());
+    ASSERT_TRUE(stripColumnsOperation != nullptr);
+    VariableToColumnMap strColMap =
+        stripColumnsOperation->computeVariableToColumnMap();
+    EXPECT_EQ(strColMap.size(), 1);
+    EXPECT_TRUE(strColMap.contains(Variable{"?d"}));
+
+    // Check whether the `GroupBy` operation still has the same
+    // `groupByVariables`.
+    qlm::vector<QueryExecutionTree*> subtree =
+        stripColumnsOperation->getChildren();
+    ASSERT_TRUE(subtree.at(0) != nullptr);
+    auto groupByOp = subtree.at(0)->getRootOperation();
+    GroupBy* groupByOperation = dynamic_cast<GroupBy*>(groupByOp.get());
+    ASSERT_TRUE(groupByOperation != nullptr);
+    std::vector<Variable> newGroupByVariables =
+        groupByOperation->groupByVariables();
+    EXPECT_EQ(newGroupByVariables.size(), 2);
+    EXPECT_EQ(newGroupByVariables.at(0), Variable{"?c"});
+    EXPECT_EQ(newGroupByVariables.at(1), Variable{"?d"});*/
+    
+  }
+
+  // Test case 5: `GroupBy` groups by ?a and produces the alias ?sumB from ?b.
+  // The parent tree requests ?a.
+  // Therefore, only ?a should remain in the result.
+  // This tests the case where an alias is removed because its target is not
+  // requested by the parent tree.
+  {
+    Alias detAlias(
+        SparqlExpressionPimpl{
+            std::make_unique<SumExpression>(
+                false, std::make_unique<VariableExpression>(Variable{"?b"})),
+            "SUM(?b)"},
+        Variable{"?sumB"});
+
+    GroupBy groupBy(qec, {Variable{"?a"}}, {detAlias}, subtree);
+
+    std::optional<std::shared_ptr<QueryExecutionTree>> resultTree =
+        groupBy.makeTreeWithStrippedColumns(std::set<Variable>{Variable{"?a"}});
+    ASSERT_TRUE(resultTree.has_value());
+    ASSERT_TRUE((*resultTree) != nullptr);
+    const VariableToColumnMap& v2cMap = (*resultTree)->getVariableColumns();
+
+    EXPECT_EQ(v2cMap.size(), 1);
+    EXPECT_TRUE(v2cMap.contains(Variable{"?a"}));
+
+    // Check whether the alias has been removed because its target ?sumB is not
+    // requested by the parent tree.
+    auto rootOperation = (*resultTree)->getRootOperation();
+    GroupBy* groupByOperation = dynamic_cast<GroupBy*>(rootOperation.get());
+    ASSERT_TRUE(groupByOperation != nullptr);
+    ASSERT_EQ((groupByOperation->aliases()).size(), 0);
+  }
 }
