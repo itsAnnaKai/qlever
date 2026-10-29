@@ -16,6 +16,7 @@
 #include "util/IdTestHelpers.h"
 #include "util/IndexTestHelpers.h"
 #include "util/OperationTestHelpers.h"
+#include "util/ColumnStrippingTestHelpers.h"
 
 using ad_utility::testing::makeAllocator;
 namespace {
@@ -231,5 +232,94 @@ TEST(MultiColumnJoin, columnOriginatesFromGraphOrUndef) {
 // and adds a `StripColumns` for the compared variables that the parent did not
 // request.
 TEST(MultiColumnJoin, makeTreeWithStrippedColumns) {
-  
+  using ::column_stripping_test_helpers::isStrippedColumns;
+  using ::testing::Key;
+  using ::testing::UnorderedElementsAre;
+  using V = Variable;
+  auto qec = ad_utility::testing::getQec();
+  // The left subtree with the variables `?a`, `?b` and `?c`.
+  auto leftSubtree = ad_utility::makeExecutionTree<ValuesForTesting>(
+      qec,
+      makeIdTableFromVector(
+          {{1, 2, 3}, {1, 2, 3}, {10, 20, 3}, {1, 6, 3}},
+          &Id::makeFromInt),
+      std::vector<std::optional<V>>{V{"?a"}, V{"?b"}, V{"?c"}});
+  // The right subtree with the variables `?d`, `?a` and `?b`.
+  auto rightSubtree = ad_utility::makeExecutionTree<ValuesForTesting>(
+      qec,
+      makeIdTableFromVector(
+          {{4, 1, 2}, {4, 10, 20}, {4, 4, 5}, {4, 6, 5}},
+          &Id::makeFromInt),
+      std::vector<std::optional<V>>{V{"?d"}, V{"?a"}, V{"?b"}});
+  auto strip = [&](std::set<V> requestedVariables) {
+    MultiColumnJoin multiColumnJoin{qec, leftSubtree, rightSubtree};
+    auto tree = multiColumnJoin.makeTreeWithStrippedColumns(requestedVariables);
+    AD_CONTRACT_CHECK(tree.has_value() && tree.value() != nullptr);
+    return std::move(tree).value();
+  };
+
+  // `?a`, `?b` and `?c` requested: `?d` is stripped
+  {
+    auto tree = strip({V{"?a"}, V{"?b"}, V{"?c"}});
+    EXPECT_THAT(
+        tree.get(),
+        isStrippedColumns<MultiColumnJoin>(
+            {V{"?a"}, V{"?b"}, V{"?c"}}, matchesIdTableFromVector({{1, 2, 3}, {1, 2, 3}, {10, 20, 3}},
+                                                &Id::makeFromInt)));
+  }
+  /*
+
+  // `OrderBy` on `?b`, `?a`, `?b` and `?d` requested: `?c` is stripped
+  // and the columns are renumbered.
+  {
+    auto tree = strip({{1, true}}, {V{"?a"}, V{"?b"}, V{"?d"}});
+    EXPECT_EQ(tree->getVariableColumn(V{"?a"}), 0u);
+    EXPECT_EQ(tree->getVariableColumn(V{"?b"}), 1u);
+    EXPECT_EQ(tree->getVariableColumn(V{"?d"}), 2u);
+    EXPECT_EQ(
+        tree->getResult(false)->idTableView(),
+        makeIdTableFromVector({{1, 6, 1}, {3, 4, 4}, {2, 2, 5}, {6, 1, 6}},
+                              &Id::makeFromInt));
+  }
+
+  // A requested variable that the subtree does not have is ignored.
+  {
+    auto tree =
+        strip({{1, true}}, {V{"?a"}, V{"?b"}, V{"?d"}, V{"?notIncluded"}});
+    EXPECT_THAT(tree->getVariableColumns(),
+                UnorderedElementsAre(Key(V{"?a"}), Key(V{"?b"}), Key(V{"?d"})));
+  }
+
+  // `OrderBy` on `?b`, only `?c` requested: the `OrderBy` keeps `?b` and `?c`,
+  // a `StripColumns` on top removes `?b`.
+  {
+    auto tree = strip({{1, true}}, {V{"?c"}});
+    EXPECT_THAT(tree.get(),
+                isStrippedColumns<StripColumns>(
+                    {V{"?c"}}, matchesIdTableFromVector({{5}, {5}, {3}, {3}},
+                                                        &Id::makeFromInt)));
+
+    EXPECT_THAT(
+        tree->getRootOperation()->getChildren().at(0),
+        ::testing::AllOf(
+            hasSortedVariables({{V{"?b"}, OrderBy::AscOrDesc::Desc}}),
+            isStrippedColumns<OrderBy>(
+                {V{"?b"}, V{"?c"}},
+                matchesIdTableFromVector({{6, 5}, {4, 5}, {2, 3}, {1, 3}},
+                                         &Id::makeFromInt))));
+  }
+
+  // All variables requested: nothing is stripped and the indices stay.
+  {
+    auto tree = strip({{1, false}}, {V{"?a"}, V{"?b"}, V{"?c"}, V{"?d"}});
+    EXPECT_THAT(
+        tree.get(),
+        ::testing::AllOf(
+            hasSortedVariables({{V{"?b"}, OrderBy::AscOrDesc::Asc}}),
+            isStrippedColumns<OrderBy>(
+                {V{"?a"}, V{"?b"}, V{"?c"}, V{"?d"}},
+                matchesIdTableFromVector(
+                    {{6, 1, 3, 6}, {2, 2, 3, 5}, {3, 4, 5, 4}, {1, 6, 5, 1}},
+                    &Id::makeFromInt))));
+  }*/
 }
