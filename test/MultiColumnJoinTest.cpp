@@ -225,3 +225,11 @@ TEST(MultiColumnJoin, columnOriginatesFromGraphOrUndef) {
   testWithTrees(values2, values3, false, false, false);
   testWithTrees(values2, values1, false, false, false);
 }
+
+// Test that `makeTreeWithStrippedColumns` strips the subtree to the requested
+// variables plus the variables that the left and right subtree have in common
+// and adds a `StripColumns` for the compared variables that the parent did not
+// request.
+TEST(MultiColumnJoin, makeTreeWithStrippedColumns) {
+  
+}
