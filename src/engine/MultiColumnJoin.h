@@ -46,6 +46,10 @@ class MultiColumnJoin : public Operation {
 
   float getMultiplicity(size_t col) override;
 
+  std::optional<std::shared_ptr<QueryExecutionTree>>
+  makeTreeWithStrippedColumns(
+      const std::set<Variable>& requestedVariables) const override;
+
  private:
   uint64_t getSizeEstimateBeforeLimit() override;
 
