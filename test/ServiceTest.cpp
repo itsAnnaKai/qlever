@@ -612,6 +612,7 @@ TEST_F(ServiceTest, getCacheKeyWithCaching) {
                 AllOf(StartsWith("SERVICE"), Not(HasSubstr("SILENT")),
                       HasSubstr("<http://localhorst/api>"),
                       HasSubstr("PREFIX doof: <http://doof.org>"),
+                      HasSubstr("SELECT ?x ?y"),
                       HasSubstr(parsedServiceClause.graphPatternAsString_)));
   }
   {
@@ -635,7 +636,38 @@ TEST_F(ServiceTest, getCacheKeyWithCaching) {
                 AllOf(StartsWith("SERVICE"), HasSubstr("SILENT"),
                       HasSubstr("<http://localhorst/api>"),
                       HasSubstr("PREFIX doof: <http://doof.org>"),
+                      HasSubstr("SELECT ?x ?y"),
                       HasSubstr(parsedServiceClause.graphPatternAsString_)));
+  }
+  {
+    SendRequestType getResultFunction = getResultFunctionFactory(
+        "http://localhorst:80/api",
+        "PREFIX doof: <http://doof.org> SELECT ?x ?y WHERE { }",
+        genJsonResult(
+            {"x", "y"},
+            {{"x", "y"}, {"bla", "bli"}, {"blu", "bla"}, {"bli", "blu"}}));
+
+        Service service1{
+            testQec,
+            {{Variable{"?x"}, Variable{"?y"}, Variable{"?z"}},
+             TripleComponent::Iri::fromIriref("<http://localhorst/api>"),
+             "PREFIX doof: <http://doof.org>",
+             "{ }",
+             false},
+            getResultFunction};
+
+    Service service2{
+        testQec,
+        {{Variable{"?x"}, Variable{"?y"}},
+         TripleComponent::Iri::fromIriref("<http://localhorst/api>"),
+         "PREFIX doof: <http://doof.org>",
+         "{ }",
+         false},
+        getResultFunction};
+
+    // Services with different `parsedServiceClause_.visibleVariables_` should
+    // have different cache keys.
+    EXPECT_NE(service1.getCacheKey(), service2.getCacheKey());
   }
 }
 

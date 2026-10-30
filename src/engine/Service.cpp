@@ -47,10 +47,17 @@ bool Service::isDeterministicImpl() const {
 // ____________________________________________________________________________
 std::string Service::getCacheKeyImpl() const {
   if (getRuntimeParameter<&RuntimeParameters::cacheServiceResults_>()) {
+    const auto& variables = parsedServiceClause_.visibleVariables_;
+    const std::string projection =
+        variables.empty()
+            ? "*"
+            : absl::StrJoin(variables, " ", Variable::AbslFormatter);
+
     return absl::StrCat(
         "SERVICE ", parsedServiceClause_.silent_ ? "SILENT " : "",
         parsedServiceClause_.serviceIri_.toStringRepresentation(), " {\n",
         parsedServiceClause_.prologue_, "\n",
+        "SELECT ", projection, " \n",
         parsedServiceClause_.graphPatternAsString_, "\n}");
   }
   return absl::StrCat("SERVICE ", cacheBreaker_);
@@ -762,6 +769,26 @@ std::unique_ptr<Operation> Service::cloneImpl() const {
       _executionContext, parsedServiceClause_, getResultFunction_);
   service->cacheBreaker_ = cacheBreaker_;
   return service;
+}
+
+// _____________________________________________________________________________
+std::optional<std::shared_ptr<QueryExecutionTree>>
+Service::makeTreeWithStrippedColumns(
+    const std::set<Variable>& requestedVariables) const {
+  std::vector<Variable> visibleVariables;
+  for (const auto& var : parsedServiceClause_.visibleVariables_) {
+    if (ad_utility::contains(requestedVariables, var)) {
+      visibleVariables.push_back(var);
+    }
+  }
+  if(parsedServiceClause_.visibleVariables_.size() == visibleVariables.size()){
+    return std::nullopt;
+  }
+  parsedQuery::Service parsedServiceClause = parsedServiceClause_;
+  parsedServiceClause.visibleVariables_ = std::move(visibleVariables);
+
+  return ad_utility::makeExecutionTree<Service>(getExecutionContext(),
+                 std::move(parsedServiceClause), getResultFunction_);
 }
 
 #endif
