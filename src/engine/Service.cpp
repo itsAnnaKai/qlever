@@ -56,8 +56,7 @@ std::string Service::getCacheKeyImpl() const {
     return absl::StrCat(
         "SERVICE ", parsedServiceClause_.silent_ ? "SILENT " : "",
         parsedServiceClause_.serviceIri_.toStringRepresentation(), " {\n",
-        parsedServiceClause_.prologue_, "\n",
-        "SELECT ", projection, " \n",
+        parsedServiceClause_.prologue_, "\n", "SELECT ", projection, " \n",
         parsedServiceClause_.graphPatternAsString_, "\n}");
   }
   return absl::StrCat("SERVICE ", cacheBreaker_);
@@ -781,14 +780,16 @@ Service::makeTreeWithStrippedColumns(
       visibleVariables.push_back(var);
     }
   }
-  if(parsedServiceClause_.visibleVariables_.size() == visibleVariables.size()){
+  if (parsedServiceClause_.visibleVariables_.size() ==
+      visibleVariables.size()) {
     return std::nullopt;
   }
   parsedQuery::Service parsedServiceClause = parsedServiceClause_;
   parsedServiceClause.visibleVariables_ = std::move(visibleVariables);
 
   return ad_utility::makeExecutionTree<Service>(getExecutionContext(),
-                 std::move(parsedServiceClause), getResultFunction_);
+                                                std::move(parsedServiceClause),
+                                                getResultFunction_);
 }
 
 #endif
