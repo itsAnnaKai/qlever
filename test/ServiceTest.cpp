@@ -24,6 +24,7 @@
 #include "parser/GraphPatternOperation.h"
 #include "util/AllocatorWithLimit.h"
 #include "util/CancellationHandle.h"
+#include "util/ColumnStrippingTestHelpers.h"
 #include "util/GTestHelpers.h"
 #include "util/HttpClientTestHelpers.h"
 #include "util/IdTableHelpers.h"
@@ -649,14 +650,14 @@ TEST_F(ServiceTest, getCacheKeyWithCaching) {
             {"x", "y"},
             {{"x", "y"}, {"bla", "bli"}, {"blu", "bla"}, {"bli", "blu"}}));
 
-        Service service1{
-            testQec,
-            {{Variable{"?x"}, Variable{"?y"}, Variable{"?z"}},
-             TripleComponent::Iri::fromIriref("<http://localhorst/api>"),
-             "PREFIX doof: <http://doof.org>",
-             "{ }",
-             false},
-            getResultFunction};
+    Service service1{
+        testQec,
+        {{Variable{"?x"}, Variable{"?y"}, Variable{"?z"}},
+         TripleComponent::Iri::fromIriref("<http://localhorst/api>"),
+         "PREFIX doof: <http://doof.org>",
+         "{ }",
+         false},
+        getResultFunction};
 
     Service service2{
         testQec,
@@ -1417,4 +1418,55 @@ TEST_F(ServiceTest, unconsumedLazySiblingResultDoesNotCrash) {
   // callback must not touch the operation anymore.
   join.reset();
   sibling.reset();
+}
+
+// Test that `makeTreeWithStrippedColumns` either returns `nullopt` if nothing
+// should be stripped, or returns a new `Service` operation with updated
+// `parsedServiceClause_.visibleVariables_`.
+TEST(Service, makeTreeWithStrippedColumns) {
+  using V = Variable;
+  parsedQuery::Service parsedServiceClause{
+      {V{"?x"}, V{"?y"}, V{"?z"}},
+      TripleComponent::Iri::fromIriref("<http://localhorst/api>"),
+      "PREFIX doof: <http://doof.org>",
+      "{ }",
+      false};
+
+  // The `Service` provides `?x`, `?y` and `?z`, but only `?x` and `?z` are
+  // requested.
+  {
+    Service service{ad_utility::testing::getQec(), parsedServiceClause};
+    auto tree = service.makeTreeWithStrippedColumns({V{"?x"}, V{"?z"}});
+    AD_CONTRACT_CHECK(tree.has_value() && tree.value() != nullptr);
+    EXPECT_THAT(tree->get(), column_stripping_test_helpers::hasVariables(
+                                 {V{"?x"}, V{"?z"}}));
+  }
+
+  // The `Service` provides `?x`, `?y` and `?z`, an invalid variable is required
+  // which must be ignored.
+  {
+    Service service{ad_utility::testing::getQec(), parsedServiceClause};
+    auto tree =
+        service.makeTreeWithStrippedColumns({V{"?x"}, V{"?z"}, V{"?notValid"}});
+    AD_CONTRACT_CHECK(tree.has_value() && tree.value() != nullptr);
+    EXPECT_THAT(tree->get(), column_stripping_test_helpers::hasVariables(
+                                 {V{"?x"}, V{"?z"}}));
+  }
+
+  // The `Service` provides `?x`, `?y` and `?z` and all are required.
+  {
+    Service service{ad_utility::testing::getQec(), parsedServiceClause};
+    auto tree =
+        service.makeTreeWithStrippedColumns({V{"?x"}, V{"?y"}, V{"?z"}});
+    EXPECT_EQ(tree, std::nullopt);
+  }
+
+  // The `Service` provides `?x`, `?y` and `?z` and all of these plus an invalid
+  // variable are required. The invalid variable must be ignored.
+  {
+    Service service{ad_utility::testing::getQec(), parsedServiceClause};
+    auto tree = service.makeTreeWithStrippedColumns(
+        {V{"?x"}, V{"?y"}, V{"?z"}, V{"?notValid"}});
+    EXPECT_EQ(tree, std::nullopt);
+  }
 }
