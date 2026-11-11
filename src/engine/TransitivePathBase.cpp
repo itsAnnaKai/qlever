@@ -714,3 +714,48 @@ const Variable TransitivePathBase::internalGraphHelper_{
     "?_Qlever_internal_transitive_path_graph", false};
 
 #endif
+
+// _____________________________________________________________________________
+std::optional<std::shared_ptr<QueryExecutionTree>>
+TransitivePathBase::makeTreeWithStrippedColumns(
+    const std::set<Variable>& requestedVariables) const {
+  // The subtree has to provide the requested variables and the variables that
+  // are required by `Bind` to build its target.
+  columnStrippingHelpers::VarsRequiredFromSubtree varsRequiredFromSubtree(
+      &requestedVariables);
+  auto [startSide, targetSide] = decideDirection();
+  if (startSide.isVariable()) {
+    varsRequiredFromSubtree.add(startSide.value_.getVariable());
+  }
+  if (targetSide.isVariable()) {
+    varsRequiredFromSubtree.add(targetSide.value_.getVariable());
+  }
+  if (graphVariable_) {
+    varsRequiredFromSubtree.add(*graphVariable_);
+  }
+
+      // Strip the trees of lhs_ and rhs_ if available.
+      // TODO muss subtree_ sicher nicht gestrippt werden?
+  auto updateTransitivePathSide = [&](TransitivePathSide& side){
+    auto& [tree, joinColumn] = side.treeAndCol_.value();
+    auto newTree = varsRequiredFromSubtree.stripSubtree(tree);
+    auto newJoinCol = (newTree.getVariableColumns()).at(side.value_.getVariable())
+    return TransitivePathSide{
+    std::make_pair(std::move(newTree), std::move(newJoinCol)),
+    (subtree_->getVariableColumns())[side.value_.getVariable()],
+    side.value_, side.outputCol_};
+  };
+  if (lhs_.isBoundVariable()){
+    TransitivePathSide newLhsSide = updateTransitivePathSide(lhs_);
+  }
+  if (rhs_.isBoundVariable()){
+    TransitivePathSide newRhsSide = updateTransitivePathSide(rhs_);
+  }
+
+  // TODO kann graphVariable_ weggelassen werden wenn nicht requested?
+  // TODO was ist wenn direction in die andere richtung, müssen dann start u targetside vertauscht werden?
+  return columnStrippingHelpers::makeTreeWithOptionalStripOperation<TransitivePathBase>(
+      getExecutionContext(), requestedVariables, subtree_,
+    std::move(newLhsSide), std::move(newRhsSide), minDist_,
+    maxDist_, activeGraphs_, graphVariable_);
+}

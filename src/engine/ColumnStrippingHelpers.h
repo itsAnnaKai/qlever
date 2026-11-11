@@ -58,19 +58,6 @@ class VarsRequiredFromSubtree {
   // Result of `addVarsFromExpression`.
   enum class AddVarsResult { Success, NeedAllVarsFromSubtree };
 
-<<<<<<< HEAD
-  // Add the variables contained in the given `expression`. Return true if all
-  // variables from the subtree are requested by the expression. Otherwise
-  // return false.
-  AddVarsResult addVarsFromExpression(
-      sparqlExpression::SparqlExpressionPimpl expression) {
-    if (expression.readsAllVisibleColumns()) {
-      return AddVarsResult::NeedAllVarsFromSubtree;
-    }
-    for (auto var : expression.containedVariables()) {
-      add(*var);
-    }
-=======
   // Add the variables that the given `expression` reads. Return
   // `NeedAllVarsFromSubtree` without adding anything if the expression reads
   // all columns of the subtree (`COUNT(DISTINCT *)`), else `Success`.
@@ -90,16 +77,11 @@ class VarsRequiredFromSubtree {
       add(dynamic_cast<const sparqlExpression::ExistsExpression&>(*expr)
               .variable());
     }
->>>>>>> upstream/master
     return AddVarsResult::Success;
   }
 
   // Strip all columns from `qet` that are not in `varsRequiredFromSubtree_`.
-<<<<<<< HEAD
   std::shared_ptr<QueryExecutionTree> stripSubtree (
-=======
-  std::shared_ptr<QueryExecutionTree> stripSubtree(
->>>>>>> upstream/master
       std::shared_ptr<QueryExecutionTree> qet) const {
     return QueryExecutionTree::makeTreeWithStrippedColumns(
         std::move(qet), *varsRequiredFromSubtree_);
