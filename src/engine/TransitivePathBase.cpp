@@ -14,6 +14,7 @@
 #include <optional>
 #include <utility>
 
+#include "ColumnStrippingHelpers.h"
 #include "engine/CallFixedSize.h"
 #include "engine/CartesianProductJoin.h"
 #include "engine/DistinctGraphs.h"
@@ -719,43 +720,56 @@ const Variable TransitivePathBase::internalGraphHelper_{
 std::optional<std::shared_ptr<QueryExecutionTree>>
 TransitivePathBase::makeTreeWithStrippedColumns(
     const std::set<Variable>& requestedVariables) const {
-  // The subtree has to provide the requested variables and the variables that
-  // are required by `Bind` to build its target.
+  // The subtree and the trees of the transitive path sides have to provide the
+  // requested variables, the `graphVariable_` and the bound variables (if
+  // available).
   columnStrippingHelpers::VarsRequiredFromSubtree varsRequiredFromSubtree(
       &requestedVariables);
-  auto [startSide, targetSide] = decideDirection();
-  if (startSide.isVariable()) {
-    varsRequiredFromSubtree.add(startSide.value_.getVariable());
+  if (lhs_.isVariable()) {
+    varsRequiredFromSubtree.add(lhs_.value_.getVariable());
   }
-  if (targetSide.isVariable()) {
-    varsRequiredFromSubtree.add(targetSide.value_.getVariable());
+  if (rhs_.isVariable()) {
+    varsRequiredFromSubtree.add(rhs_.value_.getVariable());
   }
   if (graphVariable_) {
     varsRequiredFromSubtree.add(*graphVariable_);
   }
 
-      // Strip the trees of lhs_ and rhs_ if available.
-      // TODO muss subtree_ sicher nicht gestrippt werden?
-  auto updateTransitivePathSide = [&](TransitivePathSide& side){
-    auto& [tree, joinColumn] = side.treeAndCol_.value();
-    auto newTree = varsRequiredFromSubtree.stripSubtree(tree);
-    auto newJoinCol = (newTree.getVariableColumns()).at(side.value_.getVariable())
-    return TransitivePathSide{
-    std::make_pair(std::move(newTree), std::move(newJoinCol)),
-    (subtree_->getVariableColumns())[side.value_.getVariable()],
-    side.value_, side.outputCol_};
-  };
-  if (lhs_.isBoundVariable()){
-    TransitivePathSide newLhsSide = updateTransitivePathSide(lhs_);
+  // Strip the subtree and the trees of the transitive path sides if available
+  // and update all column indices.
+  auto updateTransitivePathSide =
+      [&](const TransitivePathSide& pathSide,
+          const std::shared_ptr<QueryExecutionTree> strippedSubtree) {
+        auto& tree = pathSide.treeAndCol_.value().first;
+        auto newTree = varsRequiredFromSubtree.stripSubtree(tree);
+        size_t newJoinCol = (newTree->getVariableColumns())
+                                .at(pathSide.value_.getVariable())
+                                .columnIndex_;
+        return TransitivePathSide{
+            std::make_pair(std::move(newTree), newJoinCol),
+            (strippedSubtree->getVariableColumns())
+                .at(pathSide.value_.getVariable())
+                .columnIndex_,
+            pathSide.value_, pathSide.outputCol_};
+      };
+  auto strippedSubtree = varsRequiredFromSubtree.stripSubtree(subtree_);
+  TransitivePathSide strippedLhsSide;
+  if (lhs_.isBoundVariable()) {
+    strippedLhsSide = updateTransitivePathSide(lhs_, strippedSubtree);
+  } else {
+    strippedLhsSide = lhs_;
   }
-  if (rhs_.isBoundVariable()){
-    TransitivePathSide newRhsSide = updateTransitivePathSide(rhs_);
+  TransitivePathSide strippedRhsSide;
+  if (rhs_.isBoundVariable()) {
+    strippedRhsSide = updateTransitivePathSide(rhs_, strippedSubtree);
+  } else {
+    strippedRhsSide = rhs_;
   }
 
-  // TODO kann graphVariable_ weggelassen werden wenn nicht requested?
-  // TODO was ist wenn direction in die andere richtung, müssen dann start u targetside vertauscht werden?
-  return columnStrippingHelpers::makeTreeWithOptionalStripOperation<TransitivePathBase>(
-      getExecutionContext(), requestedVariables, subtree_,
-    std::move(newLhsSide), std::move(newRhsSide), minDist_,
-    maxDist_, activeGraphs_, graphVariable_);
+  // The new `TransitivePathBase` also exports evaluated variables that the
+  // parent did not request, the helper adds a `StripColumns` operation for
+  // them.
+  return createWithStrippedColumns(requestedVariables, strippedSubtree,
+                                   std::move(strippedLhsSide),
+                                   std::move(strippedRhsSide));
 }

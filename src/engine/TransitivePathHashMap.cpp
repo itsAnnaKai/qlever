@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "engine/CallFixedSize.h"
+#include "engine/ColumnStrippingHelpers.h"
 #include "engine/TransitivePathBase.h"
 
 // _____________________________________________________________________________
@@ -101,6 +102,18 @@ std::unique_ptr<Operation> TransitivePathHashMap::cloneImpl() const {
   copy->lhs_ = lhs_.clone();
   copy->rhs_ = rhs_.clone();
   return copy;
+}
+
+// ______________________________________________________________________________
+std::optional<std::shared_ptr<QueryExecutionTree>>
+TransitivePathHashMap::createWithStrippedColumns(
+    const std::set<Variable>& requestedVariables,
+    std::shared_ptr<QueryExecutionTree> subtree, const TransitivePathSide& lhs,
+    const TransitivePathSide& rhs) const {
+  return columnStrippingHelpers::makeTreeWithOptionalStripOperation<
+      TransitivePathHashMap>(getExecutionContext(), requestedVariables, subtree,
+                             lhs, rhs, minDist_, maxDist_, activeGraphs_,
+                             graphVariable_);
 }
 
 #endif

@@ -259,6 +259,12 @@ class TransitivePathBase : public Operation {
 
   float getMultiplicity(size_t col) override;
 
+  virtual std::optional<std::shared_ptr<QueryExecutionTree>> createWithStrippedColumns(
+    const std::set<Variable>& requestedVariables,
+    std::shared_ptr<QueryExecutionTree> subtree,
+    const TransitivePathSide& lhs,
+    const TransitivePathSide& rhs) const = 0;
+
   std::optional<std::shared_ptr<QueryExecutionTree>>
   makeTreeWithStrippedColumns(
       const std::set<Variable>& requestedVariables) const override;
